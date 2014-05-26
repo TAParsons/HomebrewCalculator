@@ -11,6 +11,7 @@
 #include <string.h>
 #include <math.h>
 
+#define TABWIDTH 8
 //#define DEBUG
 
 int line_index;
@@ -130,11 +131,17 @@ double GetValue (char *In, struct Variable *Vars) {
 	return ret;
 }
 
+void AddSpace (char c) {
+	if (c == '\t') { line_index += (TABWIDTH - (line_index+2) % TABWIDTH); }	// add two spaces for "> " prompt
+	else { line_index++; }
+	return;
+}
+
 char FindToken (char in) {
 	char c = in;
 	while (c == 0 || c == ' ' || c == '\t') {
 		c = getchar ();
-		line_index++;
+		AddSpace (c);
 		if (ECHO) { putchar (c); }
 	}
 	return c;
@@ -164,14 +171,16 @@ struct TokenStruct NextToken (char *c) {
 	}
 	
 	*c = getchar ();
+	AddSpace (*c);
 	while (TokenType (*c) == ret.type) {
 		ret.Token[length++] = *c;
 		if (ECHO) { putchar (*c); }
 		ret.Token = realloc (ret.Token, sizeof (char) * (length+1));
 		*c = getchar ();
+		AddSpace (*c);
 	}
 	if (ECHO) { putchar (*c); }
-	line_index += length;
+	//line_index += length;
 	ret.Token[length] = '\0';
 	*c = FindToken (*c);
 #ifdef DEBUG
@@ -182,13 +191,13 @@ struct TokenStruct NextToken (char *c) {
 }
 
 void HandleError (struct TokenStruct in, char status, char *look) {
-	while (*look && *look != '\n') {
+	while (*look && *look != '\n') {	// dispose of remaining characters on the line
 		*look = getchar ();
 		if (ECHO) { putchar (*look); }
-	}	// dispose of remaining characters on the line	
-
+	}
+	
 	if (status) {	// if there's an error, spit out error message and index indicator
-		while (--in.index > -2*(1-ECHO)) { printf (" "); }
+		while (--in.index > -2) { printf (" "); }	// *(1-ECHO)
 		printf ("^	");
 		fflush (0);
 		if (in.Token[0] < ' ') {	// replace non-renderable characters with the appropriate ascii label
@@ -462,7 +471,9 @@ double Evaluate (double acc, struct TokenStruct op, char *status, char *look, st
 #ifdef DEBUG
 	printf ("Evaluate in; acc: %f, op: %s, status: %i, look: %c;\n", acc, op.Token, *status, *look);
 #endif
-	if (*status > 0) { return; }	// if there are previous errors, leave everything be and dump out
+/*	if (*status > 0) {	// if there are errors from other routines, handle error
+		return;
+	}*/
 	if (!op.priority) {	// no operator present; return passed in value, if valid
 		if (!*status) { return acc; }
 		else if (*status < 0) { *status += 8; }
@@ -595,7 +606,7 @@ double EvalFunction (struct TokenStruct val, char *status, char *look, struct Va
 	double ret = GetFunction (val, Args, nargs, status);
 
 	if (Args) { free (Args); }
-	if (*status > 0) { HandleError (val, *status, look); }	// error in GetFunction; Handle here
+//	if (*status > 0) { HandleError (val, *status, look); }	// Let Evaluate or Parse handle errors
 	return ret;
 }
 
@@ -625,7 +636,7 @@ char Parse (struct Variable *Vars) {	// grabs first two tokens to see if they ar
 		HandleError (and, 0, &look);
 		return 0;
 	}
-	else if (!strcmp (and.Token, "HELP")) {	// quit calculator
+	else if (!strcmp (and.Token, "HELP")) {	// display help screen
 		puts ("Basic Calculator V 0.9");
 		puts ("--------------------------------------------------------------------------------");
 		puts ("This program is meant to be used as a general purpose calculator, akin to bc. Users can input arithmitic expressions of arbitrary length, assign and retrieve variables, and calculate common math functions. If the expression input isn't valid, the program displays an error message, indicates where in the line the problem occured, clears the input and resumes operation. In addition, users can work in interactive mode or redirect input scripts to execute a list of operations.");
@@ -680,8 +691,7 @@ char Parse (struct Variable *Vars) {	// grabs first two tokens to see if they ar
 		and = NextToken (&look);
 	}
 	
-	if (and.Token[0] == '(') { result = sign * EvalSubStatement (&status, &look, Vars); }		// substatement
-	
+	if (and.Token[0] == '(') { result = sign * EvalSubStatement (&status, &look, Vars); }		// substatement	
 	if (status) { return 0; }
 
 	ator = NextToken (&look);				// must be determined *after* substatement, and *before* function, assignment, or variable
@@ -689,13 +699,23 @@ char Parse (struct Variable *Vars) {	// grabs first two tokens to see if they ar
 	// function, assignment, or variable; need operator to decide
 	if (ator.Token[0] == '(') {				// function
 		result = sign * EvalFunction (and, &status, &look, Vars);
+		if (status) {
+			if (status == 5 || status == 9) { HandleError (and, status, &look); }
+			return 0;
+		}
 		
 		ator = NextToken (&look);
 		result = Evaluate (result, ator, &status, &look, Vars);
 	}
 	else if (and.type == 1 && ator.Token[0] == '=') { result = Evaluate (0.0, tmp, &status, &look, Vars); }	// assignment; don't need to check status here since it will be checked as soon as this statement is finished
 	else {	// variable, number, substatement, or invalid
-		if (and.Token[0] != '(') { result = sign * Resolve (and, &status, Vars); }
+		if (and.Token[0] != '(') {
+			result = sign * Resolve (and, &status, Vars);
+			if (status) {
+				HandleError (and, status, &look);
+				return 0;
+			}
+		}
 		result = Evaluate (result, ator, &status, &look, Vars);
 	}
 
@@ -713,6 +733,6 @@ int main () {
 	puts ("Basic Homebrew Calculator; Type HELP for help");
 	
 	struct Variable *Vars = malloc (sizeof (struct Variable));
-	while (!Parse (Vars));	// while 
+	while (!Parse (Vars));	// if quit has not been input (parse returns 0), quit. Otherwise, repeat
 	return 0;
 }
